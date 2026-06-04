@@ -324,6 +324,98 @@ The second message says "there" — the model knows it means Berlin, from memory
 
 ---
 
+## Step 6 — Deploy to production (Firebase Cloud Functions)
+
+So far everything ran locally. Now ship a flow as a real HTTPS endpoint with
+`onCallGenkit`, which wraps a flow into a callable Cloud Function.
+
+> **Prerequisites:** a Firebase project on the **Blaze** (pay-as-you-go) plan —
+> Cloud Functions require billing. Free Spark plan won't deploy.
+
+**6a.** Install the Firebase CLI and log in:
+
+```bash
+npm install -g firebase-tools
+firebase login
+```
+
+**6b.** Initialize Functions in a new folder (keep your workshop project intact):
+
+```bash
+mkdir genkit-deploy && cd genkit-deploy
+firebase init functions
+```
+
+Choose: **TypeScript**, your Firebase project, install dependencies = **yes**.
+This creates a `functions/` folder with its own `package.json`.
+
+**6c.** Add Genkit to the functions package:
+
+```bash
+cd functions
+npm install genkit @genkit-ai/google-genai
+```
+
+**6d.** Store your API key as a secret (not an env var — Cloud Functions can't
+see your terminal):
+
+```bash
+firebase functions:secrets:set GEMINI_API_KEY
+```
+
+Paste your `AIza...` key when prompted.
+
+**6e.** Replace `functions/src/index.ts` with a deployable flow:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+import { onCallGenkit } from 'firebase-functions/https';
+import { defineSecret } from 'firebase-functions/params';
+
+const apiKey = defineSecret('GEMINI_API_KEY');
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-3.5-flash'),
+});
+
+const cityGuideFlow = ai.defineFlow(
+  {
+    name: 'cityGuide',
+    inputSchema: z.object({ query: z.string() }),
+    outputSchema: z.object({ tips: z.string() }),
+  },
+  async ({ query }) => {
+    const { text } = await ai.generate(
+      `You are a travel assistant. Answer concisely.\n\nUser: ${query}`,
+    );
+    return { tips: text };
+  },
+);
+
+// Wrap the flow as a callable Cloud Function. The secret is injected at runtime.
+// NOTE: no auth here — see genkit.dev/docs/js/auth before going public.
+export const cityGuide = onCallGenkit({ secrets: [apiKey] }, cityGuideFlow);
+```
+
+**6f.** Deploy:
+
+```bash
+firebase deploy --only functions
+```
+
+**Check:** the CLI prints a Function URL like
+`https://us-central1-<project>.cloudfunctions.net/cityGuide`. Your flow now runs
+in the cloud — call it from any app via the Firebase callable SDK.
+
+> **Why:** `onCallGenkit` turns a flow into an HTTPS callable function with built-in
+> support for streaming, auth policies, and App Check. The key moves from a local
+> `export` to `defineSecret` → Cloud Secret Manager, because the deployed function
+> has no access to your shell. Same flow code, production execution context.
+
+---
+
 ## You built
 
 | Flow | Capability |
@@ -333,6 +425,7 @@ The second message says "there" — the model knows it means Berlin, from memory
 | `cityGuideLive` | + live Google grounding |
 | `assistant` | + RAG over your own documents |
 | `chatAssistant` | + memory across messages |
+| `cityGuide` (deployed) | + live in production on Firebase |
 
-One agent. Three knowledge sources. It routes every question itself — and now
-remembers the conversation. All with full tracing, no frontend.
+One agent. Three knowledge sources. It routes every question itself, remembers
+the conversation — and ships to the cloud. All with full tracing, no frontend.
