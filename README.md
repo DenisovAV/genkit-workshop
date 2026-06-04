@@ -423,6 +423,116 @@ in the cloud — call it from any app via the Firebase callable SDK.
 
 ---
 
+## Step 7 — Deploy anywhere (Express + Docker)
+
+Firebase is one option. But a Genkit flow is just Node — wrap it in an Express
+server with `startFlowServer`, put it in a container, and ship it to **any** cloud
+(Cloud Run, AWS, Render, Fly.io, a plain VM).
+
+**7a.** In a fresh folder, set up a Node project and add Genkit + the Express plugin:
+
+```bash
+mkdir genkit-server && cd genkit-server
+npm init -y
+npm pkg set type=module
+npm install -D typescript
+npm install genkit @genkit-ai/google-genai @genkit-ai/express
+npx tsc --init
+mkdir src
+```
+
+**7b.** Create `src/index.ts` — same flow, but served over HTTP:
+
+```typescript
+import { genkit, z } from 'genkit';
+import { googleAI } from '@genkit-ai/google-genai';
+import { startFlowServer } from '@genkit-ai/express';
+
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-3.5-flash'),
+});
+
+const cityGuide = ai.defineFlow(
+  {
+    name: 'cityGuide',
+    inputSchema: z.object({ query: z.string() }),
+    outputSchema: z.object({ tips: z.string() }),
+  },
+  async ({ query }) => {
+    const { text } = await ai.generate(
+      `You are a travel assistant. Answer concisely.\n\nUser: ${query}`,
+    );
+    return { tips: text };
+  },
+);
+
+// Serve the flow as an HTTP endpoint. Reads PORT from the environment.
+startFlowServer({ flows: [cityGuide] });
+```
+
+**7c.** Add `build` and `start` scripts:
+
+```bash
+npm pkg set scripts.build="tsc"
+npm pkg set scripts.start="node lib/index.js"
+```
+
+Make sure `tsconfig.json` outputs to `lib/` (`"outDir": "lib"`).
+
+**7d.** Run it locally to confirm:
+
+```bash
+export GEMINI_API_KEY=AIza...your_key
+npm run build && npm start
+```
+
+**Check:** the server prints a port (default 3400). Call it:
+
+```bash
+curl -X POST http://localhost:3400/cityGuide \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"query": "What to do in Oslo?"}}'
+```
+
+You get a JSON response. Your flow is now a plain HTTP API.
+
+**7e.** Add a `Dockerfile`:
+
+```dockerfile
+FROM node:20-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+ENV PORT=8080
+EXPOSE 8080
+CMD ["npm", "start"]
+```
+
+**7f.** Build the image and deploy to any container host. Example — Google Cloud Run:
+
+```bash
+gcloud run deploy genkit-server --source . \
+  --update-secrets=GEMINI_API_KEY=<your-secret-name>:latest \
+  --allow-unauthenticated
+```
+
+…or push the image to any registry and run it on AWS, Render, Fly.io, or your own
+server — the container is the same everywhere.
+
+**Check:** the platform gives you a public URL. `curl` it the same way as 7d.
+
+> **Why:** `startFlowServer` turns your flows into a standard Express app — no
+> vendor lock-in. The container is portable: any host that runs Docker runs your
+> agent. The key comes from an environment variable (`GEMINI_API_KEY`), injected
+> by the platform (Cloud Run secret, Docker `-e`, etc.). This is the difference
+> from Step 6: Firebase is the managed, batteries-included path; this is the
+> bring-your-own-cloud path. Same flow, your choice of infrastructure.
+
+---
+
 ## You built
 
 | Flow | Capability |
@@ -432,7 +542,9 @@ in the cloud — call it from any app via the Firebase callable SDK.
 | `cityGuideLive` | + live Google grounding |
 | `assistant` | + RAG over your own documents |
 | `chatAssistant` | + memory across messages |
-| `cityGuide` (deployed) | + live in production on Firebase |
+| `cityGuide` (Firebase) | + live on Firebase Cloud Functions |
+| `cityGuide` (container) | + portable to any cloud via Docker |
 
 One agent. Three knowledge sources. It routes every question itself, remembers
-the conversation — and ships to the cloud. All with full tracing, no frontend.
+the conversation — and ships to the cloud, managed or bring-your-own. All with
+full tracing, no frontend.
