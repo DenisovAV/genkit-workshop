@@ -414,6 +414,13 @@ in the cloud — call it from any app via the Firebase callable SDK.
 > `export` to `defineSecret` → Cloud Secret Manager, because the deployed function
 > has no access to your shell. Same flow code, production execution context.
 
+> **Note — why deploy `cityGuide` and not the full RAG agent?** Our RAG used an
+> *in-memory* vector store (`devLocalVectorstore`). That's perfect for local dev,
+> but in the cloud every function instance starts empty and cold — the index
+> wouldn't persist. For production RAG you'd swap it for a persistent vector store
+> (Firestore vector search, Pinecone, etc.). So we deploy the simplest flow to show
+> the `onCallGenkit` mechanics without that infrastructure detour.
+
 ---
 
 ## You built
